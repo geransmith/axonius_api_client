@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Axonius API HTTP client module."""
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import (absolute_import, division, print_function,
+                        unicode_literals)
 
 import logging
 import warnings
@@ -25,8 +26,8 @@ class Http(object):
     def __init__(
         self,
         url,
-        connect_timeout=5,
-        response_timeout=60,
+        connect_timeout=constants.CONNECT_TIMEOUT,
+        response_timeout=constants.RESPONSE_TIMEOUT,
         certpath=None,
         certwarn=True,
         certverify=False,

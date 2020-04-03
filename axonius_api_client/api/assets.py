@@ -5,6 +5,7 @@ from __future__ import (absolute_import, division, print_function,
 
 import ipaddress
 import re
+import time
 
 from .. import constants, exceptions, tools
 from . import adapters, mixins, routers
@@ -33,6 +34,32 @@ class AssetMixin(mixins.ModelAsset, mixins.Mixins):
             params["filter"] = query
 
         return self._request(method="post", path=self._router.count, json=params)
+
+    def _get_cached(self, query=None, fields=None, page_size=0, cursor=None):
+        """Get a page for a given query."""
+        if not page_size or page_size > constants.MAX_PAGE_SIZE:
+            msg = "Changed page size from {ps} to max page size {mps}"
+            msg = msg.format(ps=page_size, mps=constants.MAX_PAGE_SIZE)
+            self._log.debug(msg)
+
+            page_size = constants.MAX_PAGE_SIZE
+
+        params = {}
+        params["cursor"] = cursor
+        params["limit"] = page_size
+
+        if query:
+            params["filter"] = query
+
+        if fields:
+            if isinstance(fields, tools.LIST):
+                fields = ",".join(fields)
+
+            params["fields"] = fields
+
+        self._LAST_GET = params
+
+        return self._request(method="post", path=self._router.cached, json=params)
 
     def _get(self, query=None, fields=None, row_start=0, page_size=0):
         """Get a page for a given query.
@@ -130,9 +157,11 @@ class AssetMixin(mixins.ModelAsset, mixins.Mixins):
         page_size=None,
         all_fields=None,
         generator=False,
+        page_cache=constants.PAGE_CACHE,
     ):
         """Get objects for a given query using paging."""
-        gen = self.get_generator(
+        gen_meth = self.get_generator_cached if page_cache else self.get_generator
+        gen = gen_meth(
             query=query,
             fields=fields,
             fields_manual=fields_manual,
@@ -148,6 +177,142 @@ class AssetMixin(mixins.ModelAsset, mixins.Mixins):
             return gen
         else:
             return list(gen)
+
+    def get_generator_cached(
+        self,
+        query=None,
+        fields=None,
+        fields_manual=None,
+        fields_regex=None,
+        fields_default=True,
+        fields_error=True,
+        max_rows=None,
+        max_pages=None,
+        page_size=None,
+        all_fields=None,
+    ):
+        """Get objects for a given query using paging."""
+        fields = self.fields.validate(
+            fields=fields,
+            fields_manual=fields_manual,
+            fields_regex=fields_regex,
+            error=fields_error,
+            default=fields_default,
+            all_fields=all_fields,
+        )
+
+        if not page_size or page_size > constants.MAX_PAGE_SIZE:
+            msg = "Changed page_size={ps} to max_page_size={mps}"
+            msg = msg.format(ps=page_size, mps=constants.MAX_PAGE_SIZE)
+            self._log.debug(msg)
+
+            page_size = constants.MAX_PAGE_SIZE
+
+        page_info = {}
+        page_num = 0
+        rows_fetched = 0
+        rows_processed = 0
+        fetch_start = tools.dt_now()
+        cursor = None
+        total_rows = 0
+
+        msg = [
+            "Starting get: page_size={}".format(page_size),
+            "query={!r}".format(query or ""),
+            "fields={!r}".format(fields),
+        ]
+        self._log.debug(tools.join_comma(msg))
+
+        while True:
+            page_start = tools.dt_now()
+            page_num += 1
+
+            msg = [
+                "Fetching page_num={}".format(page_num),
+                "page_size={}".format(page_size),
+                "rows_fetched={}".format(rows_fetched),
+            ]
+            self._log.debug(tools.join_comma(obj=msg))
+            page = self._get_cached(
+                query=query, fields=fields, page_size=page_size, cursor=cursor
+            )
+
+            assets = page["assets"]
+            page_info = page["page"]
+            this_cursor = page["cursor"]
+
+            if cursor:
+                if this_cursor != cursor:
+                    msg = "cursor changed!! old {} new {}".format(cursor, this_cursor)
+                    self._log.warning(msg)
+                    cursor = this_cursor
+            else:
+                if this_cursor:
+                    cursor = this_cursor
+                else:
+                    msg = "NO CURSOR RETURNED IN page {} cursor {}"
+                    msg = msg.format(page_info, cursor)
+                    raise exceptions.ApiError(msg)
+
+            this_total_rows = page_info.get("totalResources")
+
+            if isinstance(this_total_rows, tools.INT):
+                if total_rows != 0 and this_total_rows != total_rows:
+                    msg = "total resources changed for some reason"
+                    msg = "{} old: {} new: {}".format(msg, total_rows, this_total_rows)
+                    self._log.warning(msg)
+
+                total_rows = this_total_rows
+
+            this_rows_fetched = len(assets)
+            rows_fetched += this_rows_fetched
+
+            msg = [
+                "Fetched page_num={}".format(page_num),
+                "page_took={}".format(tools.dt_sec_ago(obj=page_start)),
+                "rows_fetched={}".format(rows_fetched),
+                "page_info={}".format(page_info),
+            ]
+            self._log.debug(tools.join_comma(obj=msg))
+
+            for asset in assets:
+                if max_rows and rows_processed >= max_rows:
+                    msg = "Stopped asset loop, hit max_rows={} with rows_processed={}"
+                    msg = msg.format(max_rows, rows_processed)
+                    self._log.debug(msg)
+                    break
+
+                yield asset
+                rows_processed += 1
+
+            if not assets:
+                msg = "Stopped fetch loop, page with no assets returned"
+                self._log.debug(msg)
+                break
+
+            if max_pages and page_num >= max_pages:
+                msg = "Stopped fetch loop, hit max_pages={mp}"
+                msg = msg.format(mp=max_pages)
+                self._log.debug(msg)
+                break
+
+            if max_rows and rows_processed >= max_rows:
+                msg = "Stopped fetch loop, hit max_rows={mr} with rows_processed={rf}"
+                msg = msg.format(mr=max_rows, rf=rows_processed)
+                self._log.debug(msg)
+                break
+            time.sleep(constants.PAGE_SLEEP)
+            # XXX add test that cursor doesn't change
+
+        msg = [
+            "Finished get: rows_fetched={}".format(rows_fetched),
+            "rows_processed={}".format(rows_processed),
+            "total_rows={}".format(total_rows),
+            "fetch_took={}".format(tools.dt_sec_ago(obj=fetch_start)),
+            "query={!r}".format(query or ""),
+            "fields={!r}".format(fields),
+        ]
+        self._log.debug(tools.join_comma(obj=msg))
 
     def get_generator(
         self,
@@ -247,6 +412,7 @@ class AssetMixin(mixins.ModelAsset, mixins.Mixins):
                 msg = msg.format(mr=max_rows, rf=rows_fetched)
                 self._log.debug(msg)
                 break
+            time.sleep(constants.PAGE_SLEEP)
 
         msg = [
             "Finished get: rows_fetched={}".format(rows_fetched),

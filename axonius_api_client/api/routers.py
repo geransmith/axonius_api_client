@@ -62,6 +62,7 @@ class ApiV1(object):
         views="views",
         labels="labels",
         fields="fields",
+        cached="cached",
     )
 
     devices = Router(
@@ -73,6 +74,7 @@ class ApiV1(object):
         views="views",
         labels="labels",
         fields="fields",
+        cached="cached",
     )
 
     actions = Router(

@@ -302,26 +302,51 @@ class TestDevices(Single):
 
     def test_get_by_subnet(self, apiobj):
         """Pass."""
-        specfield = "specific_data.data.network_interfaces.subnets"
-        findfield = "specific_data.data.network_interfaces.ips"
-        withfields = [findfield, specfield]
-        asset = self.get_single_asset(
-            apiobj=apiobj, with_fields=withfields, fields=withfields
-        )
-        assert specfield in asset, list(asset)
-        asset_value = asset[specfield]
+        query = """(specific_data.data.network_interfaces.subnets in ["10.0.0.0/24"]) or (specific_data.data.network_interfaces.subnets in ["192.168.0.0/24"]) or (specific_data.data.network_interfaces.subnets in ["172.16.0.0/32"]) and ((specific_data.data.network_interfaces.subnets == ({"$exists":true,"$ne":""}))) and ((specific_data.data.network_interfaces.ips == ({"$exists":true,"$ne":""})))"""  # noqa
 
-        value = tools.listify(obj=asset_value)[0]
-        query_pre = "{} and ".format(meta.objects.QUERY_FIELD_EXISTS(field=findfield))
+        subnet_field = "specific_data.data.network_interfaces.subnets"
+        ips_field = "specific_data.data.network_interfaces.ips"
+        withfields = [ips_field, subnet_field]
+
+        assets = apiobj.get(query=query, fields=withfields)
+        # asset = assets[0]
+        # asset = self.get_single_asset(
+        #     apiobj=apiobj, with_fields=withfields, fields=withfields
+        # )
+        subnet_vals = []
+        ip_vals = []
+
+        for this_asset in assets:
+            assert subnet_field in this_asset, list(this_asset)
+            subnet_vals += tools.listify(this_asset[subnet_field])
+            ip_vals += tools.listify(this_asset[ips_field])
+
+        # XXX 255.255.255.0/32 - taniumasset showing this! BAD!
+        subnet_val = subnet_vals[0]
+        query_pre = "{} and ".format(meta.objects.QUERY_FIELD_EXISTS(field=ips_field))
 
         found = apiobj.get_by_subnet(
-            value=value, max_rows=1, fields=findfield, query_pre=query_pre,
+            value=subnet_val, fields=ips_field, query_pre=query_pre,
         )
 
         assert isinstance(found, tools.LIST)
 
-        found_value = tools.listify(obj=found[0][findfield])[0]
-        assert found_value == tools.listify(obj=asset[findfield], dictkeys=False)[0]
+        # import pdb
+
+        # pdb.set_trace()
+
+        found_ips = []
+
+        for this_found in found:
+            found_ips += tools.listify(this_found[ips_field])
+
+        # for found_ip in found_ips:
+        #     assert found_ip in ip_vals
+
+        for ip_val in ip_vals:
+            assert ip_val in found_ips
+        # found_value = tools.listify(obj=found[0][findfield])[0]
+        # assert found_value == tools.listify(obj=asset[findfield], dictkeys=False)[0]
 
     def test_get_by_subnet_not(self, apiobj):
         """Pass."""
@@ -1178,7 +1203,7 @@ class TestParsedFields(Base):
 
         assert type in meta.objects.FIELD_TYPES, type
 
-        if name not in ["labels", "adapters", "internal_axon_id"]:
+        if name not in ["labels", "adapters", "internal_axon_id", "adapter_list_length"]:
             if aname == "generic":
                 assert name.startswith("specific_data")
             else:

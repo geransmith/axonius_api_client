@@ -1,11 +1,37 @@
 # -*- coding: utf-8 -*-
 """Constants for this package."""
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import (absolute_import, division, print_function,
+                        unicode_literals)
 
 import logging
 import os
 
 from . import __package__ as PACKAGE_ROOT
+from . import tools
+
+
+def get_var_int(name, default):
+    """Pass."""
+    try:
+        return int(os.environ.get(name, default) or default)
+    except Exception:
+        return default
+
+
+def get_var_bool(name, default):
+    """Pass."""
+    try:
+        value = os.environ.get(name, default)
+        return tools.coerce_bool(value)
+    except Exception:
+        return default
+
+
+PAGE_SIZE = get_var_int("AX_PAGE_SIZE", 2000)
+PAGE_SLEEP = get_var_int("AX_PAGE_SLEEP", 0)
+PAGE_CACHE = get_var_bool("AX_PAGE_CACHE", False)
+CONNECT_TIMEOUT = get_var_int("AX_CONNECT_TIMEOUT", 5)
+RESPONSE_TIMEOUT = get_var_int("AX_RESPONSE_TIMEOUT", 900)
 
 MAX_PAGE_SIZE = 2000
 """:obj:`int`: Maximum page size that REST API allows."""
